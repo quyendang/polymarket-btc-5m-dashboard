@@ -173,10 +173,18 @@ communicate only through the shared PostgreSQL `DATABASE_URL`; no direct worker
 URL is required. Run exactly one claim process:
 
 ```bash
-docker compose up -d --build claim-worker
-docker compose logs -f claim-worker
-curl http://127.0.0.1:8000/health
+docker compose -f deploy/claim-worker.compose.yml run --rm claim-worker \
+  python -m app.claim_preflight
+docker compose -f deploy/claim-worker.compose.yml up -d --build
+docker compose -f deploy/claim-worker.compose.yml ps
+docker compose -f deploy/claim-worker.compose.yml logs --tail=100 claim-worker
 ```
+
+The preflight is offline: it derives the signer address, verifies that the
+configured account wallet is a deterministic Deposit Wallet, and checks that a
+Relayer API key address matches the signer. It never calls `/submit` and never
+prints secret values. The Compose overlay exposes no public port; health is
+reported through Docker and PostgreSQL heartbeat.
 
 Keep `AUTO_CLAIM_ENABLED=false` until the dashboard shows the claim worker
 heartbeat and the configured signer/wallet have been checked. Enable it first

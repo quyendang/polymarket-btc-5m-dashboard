@@ -1,0 +1,18 @@
+services:
+  claim-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.entrypoint"]
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      SERVICE_ROLE: claim-worker
+      PORT: "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

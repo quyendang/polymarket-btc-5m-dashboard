@@ -23,6 +23,7 @@ os.environ["LIVE_TRADING_ENABLED"] = "false"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.config import settings  # noqa: E402
+from app.claim_preflight import inspect_claim_environment  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import BotRun, Trade, WorkerHeartbeat, utcnow  # noqa: E402
@@ -374,6 +375,74 @@ def test_claim_client_can_derive_clob_credentials(monkeypatch):
     assert isinstance(client, FakeSecureClient)
     assert captured["credentials"] is None
     assert isinstance(captured["api_key"], polymarket.RelayerApiKey)
+
+
+def test_claim_preflight_verifies_deposit_wallet_and_relayer_signer(monkeypatch):
+    from eth_account import Account
+    from polymarket import PRODUCTION
+    from polymarket._internal.wallet import derive_beacon_deposit_wallet_address
+
+    private_key = (
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    )
+    signer = Account.from_key(private_key).address
+    wallet = derive_beacon_deposit_wallet_address(
+        signer,
+        PRODUCTION.wallet_derivation,
+    )
+    for name in (
+        "POLY_API_KEY", "POLY_API_SECRET", "POLY_API_PASSPHRASE",
+        "POLY_BUILDER_API_KEY", "POLY_BUILDER_API_SECRET",
+        "POLY_BUILDER_API_PASSPHRASE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("POLY_PRIVATE_KEY", private_key)
+    monkeypatch.setenv("POLY_FUNDER_ADDRESS", wallet)
+    monkeypatch.setenv("POLY_SIGNATURE_TYPE", "3")
+    monkeypatch.setenv("POLY_RELAYER_API_KEY", "relay-key")
+    monkeypatch.setenv("POLY_RELAYER_ADDRESS", signer)
+
+    report = inspect_claim_environment()
+
+    assert report["ready"] is True
+    assert report["wallet_type"] == "DEPOSIT_WALLET"
+    assert report["relayer_address_matches_signer"] is True
+    assert report["errors"] == []
+
+
+def test_claim_preflight_rejects_relayer_key_for_another_signer(monkeypatch):
+    from eth_account import Account
+    from polymarket import PRODUCTION
+    from polymarket._internal.wallet import derive_beacon_deposit_wallet_address
+
+    private_key = (
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    )
+    signer = Account.from_key(private_key).address
+    wallet = derive_beacon_deposit_wallet_address(
+        signer,
+        PRODUCTION.wallet_derivation,
+    )
+    for name in (
+        "POLY_API_KEY", "POLY_API_SECRET", "POLY_API_PASSPHRASE",
+        "POLY_BUILDER_API_KEY", "POLY_BUILDER_API_SECRET",
+        "POLY_BUILDER_API_PASSPHRASE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("POLY_PRIVATE_KEY", private_key)
+    monkeypatch.setenv("POLY_FUNDER_ADDRESS", wallet)
+    monkeypatch.setenv("POLY_SIGNATURE_TYPE", "3")
+    monkeypatch.setenv("POLY_RELAYER_API_KEY", "relay-key")
+    monkeypatch.setenv(
+        "POLY_RELAYER_ADDRESS",
+        "0x0000000000000000000000000000000000000001",
+    )
+
+    report = inspect_claim_environment()
+
+    assert report["ready"] is False
+    assert report["relayer_address_matches_signer"] is False
+    assert "must equal the signer address" in report["errors"][0]
 
 
 def test_live_client_uses_deposit_wallet_for_signature_type_3(monkeypatch):
