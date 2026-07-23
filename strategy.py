@@ -101,13 +101,13 @@ def _tick_trend(ticks: list[float]) -> float:
     if total == 0:
         return 0.0
     net_pct = (ticks[-1] - ticks[0]) / ticks[0] * 100
-    if abs(net_pct) <= 0.005:
+    if abs(net_pct) <= GUIDE.tick_trend_min_move_pct:
         return 0.0
     up_ratio = ups / total
     down_ratio = downs / total
-    if net_pct > 0 and up_ratio >= 0.60:
+    if net_pct > 0 and up_ratio >= GUIDE.tick_trend_min_ratio:
         return GUIDE.tick_trend_weight
-    if net_pct < 0 and down_ratio >= 0.60:
+    if net_pct < 0 and down_ratio >= GUIDE.tick_trend_min_ratio:
         return -GUIDE.tick_trend_weight
     return 0.0
 
@@ -165,18 +165,24 @@ def analyze(
         score += bd.get("acceleration", 0.0)
 
     # 4. EMA 9/21 crossover (weight 1) -------------------------------------
-    ema9 = ema(closes[-30:], 9) if len(closes) >= 9 else None
-    ema21 = ema(closes[-30:], 21) if len(closes) >= 21 else None
+    ema9 = (
+        ema(closes[-GUIDE.candle_lookback:], GUIDE.ema_short_period)
+        if len(closes) >= GUIDE.ema_short_period else None
+    )
+    ema21 = (
+        ema(closes[-GUIDE.candle_lookback:], GUIDE.ema_long_period)
+        if len(closes) >= GUIDE.ema_long_period else None
+    )
     if ema9 is not None and ema21 is not None and ema9 != ema21:
         bd["ema"] = GUIDE.ema_weight if ema9 > ema21 else -GUIDE.ema_weight
         score += bd["ema"]
 
     # 5. RSI-14 extremes (weight 2) — overbought/oversold ------------------
-    r = rsi(closes)
+    r = rsi(closes, GUIDE.rsi_period)
     if r is not None:
-        if r > 75:
+        if r > GUIDE.rsi_overbought:
             bd["rsi"] = -GUIDE.rsi_weight   # overbought -> expect pullback (down)
-        elif r < 25:
+        elif r < GUIDE.rsi_oversold:
             bd["rsi"] = GUIDE.rsi_weight    # oversold -> expect bounce (up)
         score += bd.get("rsi", 0.0)
 
@@ -184,7 +190,7 @@ def analyze(
     if len(volumes) >= 6:
         recent_vol = sum(volumes[-3:]) / 3
         prior_vol = sum(volumes[-6:-3]) / 3
-        if prior_vol > 0 and recent_vol >= 1.5 * prior_vol:
+        if prior_vol > 0 and recent_vol >= GUIDE.volume_surge_ratio * prior_vol:
             # Confirm whichever way price is currently leaning.
             lean = GUIDE.volume_weight if (closes[-1] - closes[-3]) >= 0 else -GUIDE.volume_weight
             bd["volume"] = lean

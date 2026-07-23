@@ -21,10 +21,11 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import markets
+from guide import GUIDE
 
-FALLBACK_LIMIT_PRICE = 0.95
-MIN_SHARES = 5              # Polymarket per-order minimum
-RETRY_INTERVAL = 3         # seconds between FOK retries
+FALLBACK_LIMIT_PRICE = GUIDE.gtc_limit_price
+MIN_SHARES = GUIDE.minimum_order_shares
+RETRY_INTERVAL = GUIDE.fok_retry_interval
 
 
 @dataclass
@@ -115,13 +116,20 @@ class LiveExecutor:
         except Exception:
             return MIN_SHARES
 
-    def _has_asks(self, token_id: str) -> bool:
+    def _has_asks(self, token_id: str) -> Optional[bool]:
         try:
             ob = self._client.get_order_book(token_id)
-            asks = ob.get("asks") if isinstance(ob, dict) else getattr(ob, "asks", None)
+            if isinstance(ob, dict):
+                if "asks" not in ob:
+                    return None
+                asks = ob["asks"]
+            else:
+                if ob is None or not hasattr(ob, "asks"):
+                    return None
+                asks = ob.asks
             return bool(asks)
         except Exception:
-            return False
+            return None
 
     def prepare_window(self, window_ts: int) -> Optional[float]:
         """Resolve live-only dependencies before the T-10/T-5 snipe window."""
@@ -172,10 +180,27 @@ class LiveExecutor:
             if fill.ok:
                 return fill
             last_fill = fill
+            if fill.order_id and fill.status not in (
+                "failed", "rejected", "cancelled", "expired", "unmatched",
+            ):
+                return Fill(
+                    False,
+                    "fok",
+                    f"FOK state {fill.status} requires reconciliation; duplicate blocked",
+                    order_id=fill.order_id,
+                    token_id=token,
+                    status="reconcile_required",
+                    average_price=fill.average_price,
+                    filled_shares=fill.filled_shares,
+                    spent=fill.spent,
+                )
             # If there's simply no sell-side liquidity, switch to the limit fallback.
-            if not self._has_asks(token):
+            asks_state = self._has_asks(token)
+            if asks_state is False:
                 print("  [live] no asks — switching to GTC $0.95 limit fallback")
                 return self._try_gtc_fallback(token, bet, close_ts, cancellation)
+            if asks_state is None:
+                print("  [live] orderbook unavailable — keeping FOK retry path")
             if cancellation and cancellation.wait(RETRY_INTERVAL):
                 return Fill(False, "none", "emergency stop during FOK retry", token_id=token)
             if not cancellation:
@@ -271,13 +296,20 @@ class LiveExecutor:
                 order_type=OrderType.FOK,
             )
             source = resp if isinstance(resp, dict) else {}
-            ok = bool(resp) and source.get("success", True) is not False
+            response_success = source.get("success")
+            response_error = str(source.get("errorMsg") or "").strip()
             order_id = self._order_id(source)
             price, filled, spent = self._fill_metrics(source, usdc)
             if order_id and filled <= 0:
                 snapshot, price, filled, spent = self._snapshot(order_id, usdc)
                 source = snapshot or source
-            status = str(source.get("status") or ("matched" if ok else "failed")).lower()
+            status = str(source.get("status") or "failed").lower()
+            ok = (
+                bool(order_id)
+                and status in ("matched", "filled")
+                and response_success is not False
+                and not response_error
+            )
             detail = self._safe_detail(source or resp)
             print(f"  [live] FOK: {detail}")
             return Fill(
@@ -318,8 +350,13 @@ class LiveExecutor:
                 order_type=OrderType.GTC,
             )
             source = resp if isinstance(resp, dict) else {}
-            posted = bool(resp) and source.get("success", True) is not False
             order_id = self._order_id(source)
+            response_error = str(source.get("errorMsg") or "").strip()
+            posted = (
+                bool(order_id)
+                and source.get("success") is not False
+                and not response_error
+            )
             detail = self._safe_detail(source or resp)
             print(f"  [live] GTC posted: {detail}")
             if not posted or not order_id:

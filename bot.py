@@ -121,9 +121,12 @@ class Mode:
 
 
 MODES = {
-    "safe": Mode("safe", 0.30, "25% of bankroll, min 30% confidence"),
-    "aggressive": Mode("aggressive", 0.20, "bet proceeds only, protect original"),
-    "degen": Mode("degen", 0.00, "all-in every trade, take every signal"),
+    "safe": Mode("safe", GUIDE.safe_confidence,
+                 "25% of bankroll, min 30% confidence"),
+    "aggressive": Mode("aggressive", GUIDE.aggressive_confidence,
+                       "bet proceeds only, protect original"),
+    "degen": Mode("degen", GUIDE.degen_confidence,
+                  "all-in every trade, take every signal"),
 }
 
 
@@ -137,7 +140,7 @@ def bet_size(mode: str, bankroll: float, starting: float, min_bet: float,
     degen:      entire bankroll, every time.
     """
     if mode == "safe":
-        bet = 0.25 * bankroll
+        bet = GUIDE.safe_bankroll_fraction * bankroll
     elif mode == "aggressive":
         profits = bankroll - starting
         if not has_traded:

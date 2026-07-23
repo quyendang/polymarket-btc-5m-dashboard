@@ -26,7 +26,7 @@ from app.main import app  # noqa: E402
 from app.models import WorkerHeartbeat, utcnow  # noqa: E402
 from app import trader_worker  # noqa: E402
 from app.readiness import credentials_complete  # noqa: E402
-from execution import LiveExecutor  # noqa: E402
+from execution import Fill, LiveExecutor  # noqa: E402
 from guide import GUIDE  # noqa: E402
 
 
@@ -51,6 +51,51 @@ def test_guide_profile_is_locked():
     )
     assert GUIDE.poll_interval == 2.0
     assert GUIDE.spike_threshold == 1.5
+    assert GUIDE.candle_lookback == 30
+    assert GUIDE.confidence_divisor == 7.0
+    assert (
+        GUIDE.safe_confidence,
+        GUIDE.aggressive_confidence,
+        GUIDE.degen_confidence,
+        GUIDE.safe_bankroll_fraction,
+    ) == (0.30, 0.20, 0.0, 0.25)
+    assert (
+        GUIDE.window_delta_decisive_pct,
+        GUIDE.window_delta_strong_pct,
+        GUIDE.window_delta_moderate_pct,
+        GUIDE.window_delta_slight_pct,
+    ) == (0.10, 0.02, 0.005, 0.001)
+    assert (
+        GUIDE.window_delta_decisive_weight,
+        GUIDE.window_delta_strong_weight,
+        GUIDE.window_delta_moderate_weight,
+        GUIDE.window_delta_slight_weight,
+    ) == (7.0, 5.0, 3.0, 1.0)
+    assert (
+        GUIDE.momentum_weight,
+        GUIDE.acceleration_weight,
+        GUIDE.ema_weight,
+        GUIDE.rsi_weight,
+        GUIDE.volume_weight,
+        GUIDE.tick_trend_weight,
+    ) == (2.0, 1.5, 1.0, 2.0, 1.0, 2.0)
+    assert (
+        GUIDE.ema_short_period,
+        GUIDE.ema_long_period,
+        GUIDE.rsi_period,
+        GUIDE.rsi_overbought,
+        GUIDE.rsi_oversold,
+    ) == (9, 21, 14, 75.0, 25.0)
+    assert (
+        GUIDE.volume_surge_ratio,
+        GUIDE.tick_trend_min_ratio,
+        GUIDE.tick_trend_min_move_pct,
+    ) == (1.5, 0.60, 0.005)
+    assert (
+        GUIDE.fok_retry_interval,
+        GUIDE.gtc_limit_price,
+        GUIDE.minimum_order_shares,
+    ) == (3.0, 0.95, 5.0)
 
 
 def test_login_csrf_and_dry_run_creation(client: TestClient):
@@ -233,6 +278,11 @@ class FakeClient:
         return self.cancel_response or {"canceled": [payload.orderID], "not_canceled": {}}
 
 
+class FailingOrderBookClient(FakeClient):
+    def get_order_book(self, token_id):
+        raise RuntimeError("orderbook unavailable")
+
+
 def executor_with(client: FakeClient) -> LiveExecutor:
     executor = object.__new__(LiveExecutor)
     executor._client = client
@@ -259,6 +309,20 @@ def test_fok_normalizes_amounts_without_exposing_raw_response():
     assert "must-not-leak" not in fill.detail
     assert len(fake.market_orders) == 1
     assert fake.market_orders[0][1] == "FOK"
+    assert fake.market_orders[0][0].amount == 5.0
+
+
+@pytest.mark.parametrize("response", [
+    {"success": True, "orderID": "fok-1", "status": "live"},
+    {"success": True, "status": "matched", "makingAmount": "5.0",
+     "takingAmount": "6.25"},
+    {"success": True, "orderID": "fok-1", "status": "matched",
+     "errorMsg": "no match"},
+])
+def test_fok_requires_confirmed_matched_order(response):
+    fill = executor_with(FakeClient([], response))._try_fok("token", 5.0)
+
+    assert fill.ok is False
 
 
 def test_clob_client_builds_v2_order_schema(monkeypatch):
@@ -297,6 +361,8 @@ def test_gtc_waits_for_fill_instead_of_treating_post_as_fill():
     assert fill.spent == 9.5
     assert len(fake.limit_orders) == 1
     assert fake.limit_orders[0][1] == "GTC"
+    assert fake.limit_orders[0][0].price == GUIDE.gtc_limit_price
+    assert fake.limit_orders[0][0].size >= GUIDE.minimum_order_shares
 
 
 def test_gtc_cancels_unfilled_remainder_at_close():
@@ -316,6 +382,139 @@ def test_v2_dict_orderbook_preserves_asks_and_minimum():
 
     assert executor._has_asks("token") is True
     assert executor._min_order_size("token") == 7
+
+
+def test_orderbook_error_is_not_treated_as_no_asks():
+    executor = executor_with(FailingOrderBookClient([]))
+
+    assert executor._has_asks("token") is None
+    executor._client = FakeClient([], order_book={"min_order_size": "5"})
+    assert executor._has_asks("token") is None
+
+
+def test_execute_retries_fok_when_orderbook_state_is_unknown(monkeypatch):
+    market = type("Market", (), {
+        "token_for": lambda self, direction: "token",
+    })()
+    executor = executor_with(FailingOrderBookClient([]))
+    executor._prepared_markets[300] = market
+    executor._prepared_balances[300] = 10.0
+    attempts = iter([
+        Fill(False, "fok", "no match", token_id="token", status="failed"),
+        Fill(True, "fok", "matched", order_id="fok-2", token_id="token",
+             status="matched", spent=5.0),
+    ])
+    monkeypatch.setattr(executor, "_try_fok", lambda token_id, usdc: next(attempts))
+    monkeypatch.setattr(
+        executor,
+        "_try_gtc_fallback",
+        lambda *args, **kwargs: pytest.fail("unknown orderbook must not trigger GTC"),
+    )
+    clock = {"now": 100.0}
+    monkeypatch.setattr("execution.time.time", lambda: clock["now"])
+    monkeypatch.setattr(
+        "execution.time.sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+
+    fill = executor.execute(300, 110, "up", 5.0)
+
+    assert fill.ok is True
+    assert fill.order_id == "fok-2"
+    assert clock["now"] == 100.0 + GUIDE.fok_retry_interval
+
+
+def test_execute_uses_gtc_only_for_confirmed_empty_asks(monkeypatch):
+    market = type("Market", (), {
+        "token_for": lambda self, direction: "token",
+    })()
+    executor = executor_with(FakeClient([], order_book={
+        "asks": [],
+        "min_order_size": "5",
+    }))
+    executor._prepared_markets[300] = market
+    executor._prepared_balances[300] = 10.0
+    monkeypatch.setattr(
+        executor,
+        "_try_fok",
+        lambda token_id, usdc: Fill(False, "fok", "no match", token_id=token_id),
+    )
+    expected = Fill(False, "gtc", "cancelled", token_id="token", status="cancelled")
+    monkeypatch.setattr(
+        executor,
+        "_try_gtc_fallback",
+        lambda token_id, usdc, close_ts, cancellation: expected,
+    )
+
+    fill = executor.execute(300, int(time.time()) + 5, "up", 5.0)
+
+    assert fill is expected
+
+
+def test_execute_retries_fok_when_asks_are_present(monkeypatch):
+    market = type("Market", (), {
+        "token_for": lambda self, direction: "token",
+    })()
+    executor = executor_with(FakeClient([], order_book={
+        "asks": [{"price": "0.96", "size": "10"}],
+        "min_order_size": "5",
+    }))
+    executor._prepared_markets[300] = market
+    executor._prepared_balances[300] = 10.0
+    attempts = iter([
+        Fill(False, "fok", "no match", token_id="token", status="failed"),
+        Fill(True, "fok", "matched", order_id="fok-2", token_id="token",
+             status="matched", spent=5.0),
+    ])
+    monkeypatch.setattr(executor, "_try_fok", lambda token_id, usdc: next(attempts))
+    monkeypatch.setattr(
+        executor,
+        "_try_gtc_fallback",
+        lambda *args, **kwargs: pytest.fail("asks present must not trigger GTC"),
+    )
+    clock = {"now": 100.0}
+    monkeypatch.setattr("execution.time.time", lambda: clock["now"])
+    monkeypatch.setattr(
+        "execution.time.sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+
+    fill = executor.execute(300, 110, "up", 5.0)
+
+    assert fill.ok is True
+    assert fill.order_id == "fok-2"
+
+
+def test_execute_blocks_duplicate_when_fok_state_is_ambiguous(monkeypatch):
+    market = type("Market", (), {
+        "token_for": lambda self, direction: "token",
+    })()
+    executor = executor_with(FakeClient([], order_book={"asks": []}))
+    executor._prepared_markets[300] = market
+    executor._prepared_balances[300] = 10.0
+    monkeypatch.setattr(
+        executor,
+        "_try_fok",
+        lambda token_id, usdc: Fill(
+            False,
+            "fok",
+            "live",
+            order_id="fok-live",
+            token_id=token_id,
+            status="live",
+        ),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_try_gtc_fallback",
+        lambda *args, **kwargs: pytest.fail("ambiguous FOK must not trigger GTC"),
+    )
+
+    fill = executor.execute(300, int(time.time()) + 5, "up", 5.0)
+
+    assert fill.ok is False
+    assert fill.status == "reconcile_required"
+    assert fill.order_id == "fok-live"
 
 
 def test_gtc_does_not_claim_cancel_when_api_did_not_confirm():
