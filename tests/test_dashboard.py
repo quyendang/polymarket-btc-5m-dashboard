@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import time
+from datetime import timedelta
 
 import pytest
 
@@ -19,8 +20,11 @@ os.environ["LIVE_TRADING_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.database import Base, engine  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models import WorkerHeartbeat, utcnow  # noqa: E402
+from app import trader_worker  # noqa: E402
 from execution import LiveExecutor  # noqa: E402
 from guide import GUIDE  # noqa: E402
 
@@ -83,14 +87,101 @@ def test_live_run_is_blocked_by_environment(client: TestClient):
     assert "Railway env" in response.json()["detail"]
 
 
-def test_settings_never_return_secret_values(client: TestClient, monkeypatch):
+def test_settings_use_trader_readiness_without_reading_web_secrets(
+    client: TestClient, monkeypatch,
+):
     monkeypatch.setenv("POLY_PRIVATE_KEY", "super-secret")
+    with SessionLocal() as db:
+        db.add(WorkerHeartbeat(
+            role="trader-worker",
+            status="idle",
+            last_seen=utcnow(),
+            detail={
+                "readiness": {
+                    "credentials": {
+                        "POLY_PRIVATE_KEY": False,
+                        "POLY_API_KEY": False,
+                        "POLY_API_SECRET": False,
+                        "POLY_API_PASSPHRASE": False,
+                        "POLY_FUNDER_ADDRESS": False,
+                    },
+                    "credentials_complete": False,
+                    "api_valid": False,
+                    "usdc_balance": None,
+                }
+            },
+        ))
+        db.commit()
     authenticate(client)
     response = client.get("/api/settings")
     assert response.status_code == 200
     body = response.json()
-    assert body["environment"]["POLY_PRIVATE_KEY"] is True
+    assert body["environment"]["POLY_PRIVATE_KEY"] is False
+    assert body["trader_readiness"]["worker_online"] is True
     assert "super-secret" not in response.text
+
+
+def test_live_run_requires_fresh_ready_trader(client: TestClient, monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
+    headers = authenticate(client)
+    payload = {
+        "run_kind": "live",
+        "mode": "safe",
+        "session_budget": 20,
+        "min_bet": 1,
+        "once": True,
+        "password": "admin",
+        "confirmation_text": "GIAO DICH THAT",
+    }
+
+    missing = client.post("/api/runs", headers=headers, json=payload)
+    assert missing.status_code == 503
+    assert "trader-worker" in missing.json()["detail"]
+
+    with SessionLocal() as db:
+        db.add(WorkerHeartbeat(
+            role="trader-worker",
+            status="idle",
+            last_seen=utcnow() - timedelta(seconds=60),
+            detail={"readiness": {"credentials_complete": True, "api_valid": True,
+                                  "live_trading_enabled": True}},
+        ))
+        db.commit()
+    stale = client.post("/api/runs", headers=headers, json=payload)
+    assert stale.status_code == 503
+    assert "heartbeat" in stale.json()["detail"]
+
+    with SessionLocal() as db:
+        worker = db.get(WorkerHeartbeat, "trader-worker")
+        worker.last_seen = utcnow()
+        worker.detail = {
+            "readiness": {
+                "credentials_complete": True,
+                "api_valid": True,
+                "live_trading_enabled": True,
+                "usdc_balance": 29.0,
+            }
+        }
+        db.commit()
+    ready = client.post("/api/runs", headers=headers, json=payload)
+    assert ready.status_code == 200
+    assert ready.json()["run_kind"] == "live"
+
+
+def test_trader_worker_rechecks_live_readiness_before_engine(monkeypatch):
+    blocked = {
+        "live_trading_enabled": True,
+        "credentials_complete": True,
+        "api_valid": False,
+        "usdc_balance": None,
+    }
+    monkeypatch.setattr(trader_worker, "refresh_readiness", lambda: blocked)
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        trader_worker.assert_live_ready()
+
+    ready = {**blocked, "api_valid": True, "usdc_balance": 29.0}
+    monkeypatch.setattr(trader_worker, "refresh_readiness", lambda: ready)
+    trader_worker.assert_live_ready()
 
 
 class FakeClient:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from datetime import timedelta
@@ -12,12 +13,78 @@ import bot
 from app.config import settings
 from app.database import SessionLocal, engine, init_db
 from app.models import BotRun, EngineEvent, Trade, WorkerHeartbeat, utcnow
+from app.readiness import credential_presence, credentials_complete
 from guide import GUIDE
 
 
 ROLE = "trader-worker"
 RUNNING_STATES = {"starting", "waiting", "sniping", "placing", "resolving", "stopping"}
 ADVISORY_LOCK_KEY = 5_300_202_607
+PREFLIGHT_INTERVAL = 60
+_readiness_lock = threading.Lock()
+_readiness_state: dict = {}
+
+
+def refresh_readiness() -> dict:
+    """Validate live credentials inside trader-worker and publish no secrets."""
+    presence = credential_presence()
+    try:
+        signature_type = int(os.getenv("POLY_SIGNATURE_TYPE", "1"))
+    except ValueError:
+        signature_type = -1
+    complete = signature_type in (0, 1, 2) and credentials_complete(
+        presence, signature_type)
+    state = {
+        "credentials": presence,
+        "credentials_complete": complete,
+        "api_valid": False,
+        "balance_check_ok": False,
+        "usdc_balance": None,
+        "live_trading_enabled": settings.live_trading_enabled,
+        "signature_type": signature_type if signature_type in (0, 1, 2) else None,
+        "preflight_at": utcnow().isoformat(),
+    }
+    if complete:
+        try:
+            from execution import LiveExecutor
+
+            executor = LiveExecutor(dry_run=False)
+            balance = executor.usdc_balance(quiet=True)
+            state["api_valid"] = balance is not None
+            state["balance_check_ok"] = balance is not None
+            state["usdc_balance"] = balance
+        except (Exception, SystemExit):
+            # Never publish raw auth/provider errors; they can contain request data.
+            pass
+    with _readiness_lock:
+        _readiness_state.clear()
+        _readiness_state.update(state)
+    return dict(state)
+
+
+def readiness_snapshot() -> dict:
+    with _readiness_lock:
+        return dict(_readiness_state)
+
+
+def heartbeat_detail(detail: dict | None = None) -> dict:
+    payload = dict(detail or {})
+    payload["guide_profile"] = GUIDE.profile_id
+    payload["readiness"] = readiness_snapshot()
+    return payload
+
+
+def assert_live_ready(min_bet: float = 0.0) -> None:
+    readiness = refresh_readiness()
+    if not readiness["live_trading_enabled"]:
+        raise RuntimeError("LIVE_TRADING_ENABLED is false on trader-worker")
+    if not readiness["credentials_complete"]:
+        raise RuntimeError("Polymarket credentials are incomplete on trader-worker")
+    if not readiness["api_valid"]:
+        raise RuntimeError("Polymarket read-only preflight failed on trader-worker")
+    balance = readiness["usdc_balance"]
+    if balance is None or balance < min_bet:
+        raise RuntimeError("USDC balance is below the run minimum bet")
 
 
 def heartbeat(status: str = "idle", detail: dict | None = None) -> None:
@@ -27,7 +94,7 @@ def heartbeat(status: str = "idle", detail: dict | None = None) -> None:
             item = WorkerHeartbeat(role=ROLE)
             db.add(item)
         item.status = status
-        item.detail = detail or {}
+        item.detail = heartbeat_detail(detail)
         item.last_seen = utcnow()
         db.commit()
 
@@ -137,7 +204,9 @@ def monitor_run(run_id: str, token: bot.CancellationToken,
                 worker = WorkerHeartbeat(role=ROLE)
                 db.add(worker)
             worker.status = "running"
-            worker.detail = {"run_id": run_id, "run_kind": item.run_kind, "state": item.status}
+            worker.detail = heartbeat_detail({
+                "run_id": run_id, "run_kind": item.run_kind, "state": item.status,
+            })
             worker.last_seen = utcnow()
             db.commit()
 
@@ -174,6 +243,8 @@ def run_job(item: BotRun) -> None:
     monitor = threading.Thread(target=monitor_run, args=(item.id, token, done), daemon=True)
     monitor.start()
     try:
+        if item.run_kind == "live":
+            assert_live_ready(item.min_bet)
         config = bot.RunConfig(
             run_kind=item.run_kind,
             mode=item.mode,
@@ -221,16 +292,21 @@ def main() -> None:
     init_db()
     mark_interrupted_runs()
     cleanup_events()
-    heartbeat("idle", {"guide_profile": GUIDE.profile_id})
+    refresh_readiness()
+    heartbeat("idle")
     last_cleanup = time.time()
+    last_preflight = time.time()
     while True:
         item = claim_next_run()
         if item:
             run_job(item)
             heartbeat("idle", {"last_run_id": item.id})
         else:
-            heartbeat("idle", {"guide_profile": GUIDE.profile_id})
+            heartbeat("idle")
             time.sleep(2)
+        if time.time() - last_preflight > PREFLIGHT_INTERVAL:
+            refresh_readiness()
+            last_preflight = time.time()
         if time.time() - last_cleanup > 3600:
             cleanup_events()
             last_cleanup = time.time()

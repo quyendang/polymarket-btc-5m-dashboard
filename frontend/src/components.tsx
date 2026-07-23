@@ -137,6 +137,17 @@ export function RunControls({ snapshot, onChanged }: { snapshot: Snapshot; onCha
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const active = snapshot.active_run;
+  const readiness = snapshot.trader_readiness;
+  const liveFormReady = readiness.can_start_live
+    && readiness.usdc_balance != null
+    && readiness.usdc_balance >= minBet;
+  const liveReason = !readiness.worker_online ? "Trader worker chưa có heartbeat mới"
+    : !readiness.credentials_complete ? "Credentials trên trader-worker chưa đầy đủ"
+      : !readiness.api_valid ? "CLOB API hoặc kiểm tra số dư chưa đạt"
+        : !readiness.live_trading_enabled ? "LIVE_TRADING_ENABLED đang tắt ở trader-worker"
+          : !readiness.web_live_trading_enabled ? "LIVE_TRADING_ENABLED đang tắt ở web"
+            : readiness.usdc_balance == null || readiness.usdc_balance < minBet ? `Số dư thấp hơn min bet $${minBet.toFixed(2)}`
+            : "Live sẵn sàng";
 
   async function start(confirmed = false) {
     if (kind === "live" && !confirmed) { setLiveOpen(true); return; }
@@ -180,11 +191,12 @@ export function RunControls({ snapshot, onChanged }: { snapshot: Snapshot; onCha
         </div>
       ) : (
         <div className="control-form">
-          <div className="control-group"><span>Loại phiên</span><div className="segmented"><button className={kind === "dry_run" ? "selected" : ""} onClick={() => setKind("dry_run")}>Dry-run</button><button className={kind === "live" ? "selected live" : ""} onClick={() => setKind("live")}><LockKeyhole size={14} /> Real</button></div></div>
+          <div className="control-group"><span>Loại phiên</span><div className="segmented"><button className={kind === "dry_run" ? "selected" : ""} onClick={() => setKind("dry_run")}>Dry-run</button><button className={kind === "live" ? "selected live" : ""} onClick={() => setKind("live")} disabled={!liveFormReady} title={liveReason}><LockKeyhole size={14} /> Real</button></div></div>
           <div className="control-group"><span>Mode</span><div className="segmented three">{(["safe", "aggressive", "degen"] as Mode[]).map((item) => <button key={item} className={mode === item ? "selected" : ""} onClick={() => setMode(item)}>{item}</button>)}</div></div>
           <div className="field-pair"><label>Hạn mức phiên<input type="number" min="1" step="1" value={budget} onChange={(event) => setBudget(Number(event.target.value))} /></label><label>Min bet<input type="number" min="0.01" step="0.01" value={minBet} onChange={(event) => setMinBet(Number(event.target.value))} /></label></div>
           <div className="field-pair"><label className="check-label"><input type="checkbox" checked={once} onChange={(event) => setOnce(event.target.checked)} /> Chỉ một cửa sổ</label><label>Số trade tối đa<input type="number" min="1" placeholder="Không giới hạn" value={maxTrades} onChange={(event) => setMaxTrades(event.target.value)} disabled={once} /></label></div>
-          <button className={`button primary ${kind === "live" ? "live-button" : ""}`} onClick={() => start()} disabled={busy || budget < minBet}><Play size={17} /> {kind === "live" ? "Mở khóa giao dịch thật" : "Bắt đầu dry-run"}</button>
+          <div className={`live-readiness ${liveFormReady ? "ready" : "locked"}`}><StatusDot active={liveFormReady} /><span>{liveReason}</span>{readiness.usdc_balance != null && <b>${readiness.usdc_balance.toFixed(2)} USDC</b>}</div>
+          <button className={`button primary ${kind === "live" ? "live-button" : ""}`} onClick={() => start()} disabled={busy || budget < minBet || (kind === "live" && !liveFormReady)}><Play size={17} /> {kind === "live" ? "Mở khóa giao dịch thật" : "Bắt đầu dry-run"}</button>
         </div>
       )}
       {error && <p className="inline-error"><AlertTriangle size={15} />{error}</p>}

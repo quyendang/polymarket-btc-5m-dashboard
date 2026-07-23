@@ -79,6 +79,23 @@ export interface Worker {
   last_seen: string;
 }
 
+export interface TraderReadiness {
+  worker_online: boolean;
+  worker_stale: boolean;
+  worker_status: string;
+  last_seen: string | null;
+  credentials: Record<string, boolean>;
+  credentials_complete: boolean;
+  api_valid: boolean;
+  balance_check_ok: boolean;
+  usdc_balance: number | null;
+  live_trading_enabled: boolean;
+  web_live_trading_enabled: boolean;
+  signature_type: number | null;
+  preflight_at: string | null;
+  can_start_live: boolean;
+}
+
 export interface Snapshot {
   guide_profile: string;
   active_run: BotRun | null;
@@ -87,7 +104,18 @@ export interface Snapshot {
   trades: Trade[];
   events: EngineEvent[];
   workers: Worker[];
+  trader_readiness: TraderReadiness;
   stats: { trades: number; pnl: number; wins: number };
+}
+
+export interface DashboardSettings {
+  guide: Record<string, unknown>;
+  live_trading_enabled: boolean;
+  environment: Record<string, boolean>;
+  trader_readiness: TraderReadiness;
+  database: string;
+  timezone: string;
+  password_hash_configured: boolean;
 }
 
 export interface Candle {

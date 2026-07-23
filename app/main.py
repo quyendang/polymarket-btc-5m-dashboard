@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -24,6 +23,7 @@ from app.backtests import workbook_bytes
 from app.config import settings
 from app.database import SessionLocal, get_db, init_db
 from app.models import AuditLog, BacktestJob, BotRun, EngineEvent, Trade, WorkerHeartbeat, utcnow
+from app.readiness import trader_readiness
 from app.schemas import BacktestCreate, LoginRequest, RunCreate
 from app.security import (
     check_login_rate_limit,
@@ -67,6 +67,15 @@ app.add_middleware(
 
 def iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def live_readiness(db: Session) -> dict:
+    readiness = trader_readiness(db)
+    readiness["web_live_trading_enabled"] = settings.live_trading_enabled
+    readiness["can_start_live"] = bool(
+        readiness["can_start_live"] and settings.live_trading_enabled
+    )
+    return readiness
 
 
 def run_dict(item: BotRun | None) -> dict | None:
@@ -246,6 +255,7 @@ def dashboard_snapshot(db: Session = Depends(get_db)) -> dict:
         select(func.count(Trade.id), func.coalesce(func.sum(Trade.pnl), 0.0),
                func.coalesce(func.sum(func.cast(Trade.won, Integer)), 0))
     ).one()
+    readiness = live_readiness(db)
     return {
         "guide_profile": GUIDE.profile_id,
         "active_run": run_dict(active),
@@ -258,6 +268,7 @@ def dashboard_snapshot(db: Session = Depends(get_db)) -> dict:
              "last_seen": iso(item.last_seen)}
             for item in workers
         ],
+        "trader_readiness": readiness,
         "stats": {"trades": totals[0], "pnl": float(totals[1]), "wins": int(totals[2])},
     }
 
@@ -293,6 +304,38 @@ def create_run(payload: RunCreate, request: Request, db: Session = Depends(get_d
             raise HTTPException(status_code=422, detail="Thiếu xác nhận live trading.")
         if not verify_password(payload.password):
             raise HTTPException(status_code=401, detail="Mật khẩu xác nhận không đúng.")
+        readiness = live_readiness(db)
+        if readiness["last_seen"] is None:
+            raise HTTPException(
+                status_code=503,
+                detail="trader-worker chưa công bố heartbeat; chưa thể chạy live.",
+            )
+        if readiness["worker_stale"]:
+            raise HTTPException(
+                status_code=503,
+                detail="trader-worker heartbeat đã quá hạn; chưa thể chạy live.",
+            )
+        if not readiness["credentials_complete"]:
+            raise HTTPException(
+                status_code=503,
+                detail="Polymarket credentials trên trader-worker chưa đầy đủ.",
+            )
+        if not readiness["api_valid"]:
+            raise HTTPException(
+                status_code=503,
+                detail="Read-only Polymarket preflight trên trader-worker chưa thành công.",
+            )
+        balance = readiness["usdc_balance"]
+        if balance is None or balance < payload.min_bet:
+            raise HTTPException(
+                status_code=503,
+                detail="Số dư USDC trên trader-worker thấp hơn min bet của phiên.",
+            )
+        if not readiness["live_trading_enabled"]:
+            raise HTTPException(
+                status_code=503,
+                detail="LIVE_TRADING_ENABLED đang tắt trên trader-worker.",
+            )
 
     item = BotRun(
         run_kind=payload.run_kind,
@@ -414,11 +457,8 @@ def download_backtest(job_id: str, db: Session = Depends(get_db)) -> StreamingRe
 
 
 @app.get("/api/settings", dependencies=[Depends(require_auth)])
-def get_settings_view() -> dict:
-    secret_names = [
-        "POLY_PRIVATE_KEY", "POLY_API_KEY", "POLY_API_SECRET",
-        "POLY_API_PASSPHRASE", "POLY_FUNDER_ADDRESS",
-    ]
+def get_settings_view(db: Session = Depends(get_db)) -> dict:
+    readiness = live_readiness(db)
     return {
         "guide": {
             "profile_id": GUIDE.profile_id,
@@ -435,7 +475,8 @@ def get_settings_view() -> dict:
             },
         },
         "live_trading_enabled": settings.live_trading_enabled,
-        "environment": {name: bool(os.getenv(name)) for name in secret_names},
+        "environment": readiness["credentials"],
+        "trader_readiness": readiness,
         "database": "postgresql" if settings.sqlalchemy_url.startswith("postgresql") else "sqlite",
         "timezone": settings.timezone,
         "password_hash_configured": bool(settings.dashboard_password_hash),
@@ -452,6 +493,7 @@ def system_health(db: Session = Depends(get_db)) -> dict:
 
     return {
         "web": {"status": "healthy", "guide_profile": GUIDE.profile_id},
+        "trader_readiness": live_readiness(db),
         "workers": [
             {
                 "role": item.role,

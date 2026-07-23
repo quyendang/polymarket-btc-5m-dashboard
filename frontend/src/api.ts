@@ -1,4 +1,4 @@
-import type { BacktestJob, BotRun, Candle, Snapshot, Trade } from "./types";
+import type { BacktestJob, BotRun, Candle, DashboardSettings, Snapshot, Trade } from "./types";
 
 let csrfToken = "";
 
@@ -44,7 +44,7 @@ export const getSnapshot = () => request<Snapshot>("/api/dashboard/snapshot");
 export const getCandles = () => request<{ candles: Candle[] }>("/api/market/candles?limit=60");
 export const getRuns = () => request<{ items: BotRun[] }>("/api/runs?limit=100");
 export const getTrades = () => request<{ items: Trade[] }>("/api/trades?limit=300");
-export const getSettings = () => request<Record<string, unknown>>("/api/settings");
+export const getSettings = () => request<DashboardSettings>("/api/settings");
 export const getHealth = () => request<Record<string, unknown>>("/api/system/health");
 
 export function createRun(payload: Record<string, unknown>) {

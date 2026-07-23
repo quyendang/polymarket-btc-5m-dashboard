@@ -77,7 +77,7 @@ class LiveExecutor:
 
     # --- pre-trade checks --------------------------------------------------
 
-    def usdc_balance(self) -> Optional[float]:
+    def usdc_balance(self, quiet: bool = False) -> Optional[float]:
         try:
             from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
             resp = self._client.get_balance_allowance(
@@ -86,7 +86,8 @@ class LiveExecutor:
             bal = float(resp.get("balance", 0)) if isinstance(resp, dict) else float(resp)
             return bal / 1_000_000 if bal > 1000 else bal
         except Exception as e:
-            print(f"  [warn] balance check failed: {e}")
+            if not quiet:
+                print(f"  [warn] balance check failed: {e}")
             return None
 
     def _min_order_size(self, token_id: str) -> float:
