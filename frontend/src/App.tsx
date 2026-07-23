@@ -28,13 +28,19 @@ const emptySnapshot: Snapshot = {
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [snapshotReady, setSnapshotReady] = useState(false);
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [theme, setTheme] = useState(() => localStorage.getItem("polybot-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 
   const refresh = useCallback(async () => {
-    try { setSnapshot(await getSnapshot()); }
-    catch (error) { if (error instanceof Error && error.message.includes("đăng nhập")) setAuthenticated(false); }
+    try { setSnapshot(await getSnapshot()); setSnapshotReady(true); }
+    catch (error) {
+      if (error instanceof Error && error.message.includes("đăng nhập")) {
+        setSnapshotReady(false);
+        setAuthenticated(false);
+      }
+    }
   }, []);
 
   useEffect(() => { getMe().then(() => setAuthenticated(true)).catch(() => setAuthenticated(false)); }, []);
@@ -55,8 +61,9 @@ export default function App() {
 
   if (authenticated === null) return <div className="boot-screen"><Bot size={28} /><span>Đang khởi động trạm điều khiển…</span></div>;
   if (!authenticated) return <LoginScreen onLogin={() => setAuthenticated(true)} theme={theme} toggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} />;
+  if (!snapshotReady) return <div className="boot-screen"><Bot size={28} /><span>Đang đồng bộ trạng thái worker…</span></div>;
 
-  return <DashboardShell snapshot={snapshot} candles={candles} theme={theme} toggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} refresh={refresh} onLogout={() => { logout().finally(() => setAuthenticated(false)); }} />;
+  return <DashboardShell snapshot={snapshot} candles={candles} theme={theme} toggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} refresh={refresh} onLogout={() => { logout().finally(() => { setSnapshotReady(false); setAuthenticated(false); }); }} />;
 }
 
 function LoginScreen({ onLogin, theme, toggleTheme }: { onLogin: () => void; theme: string; toggleTheme: () => void }) {
