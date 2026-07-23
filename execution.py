@@ -106,14 +106,20 @@ class LiveExecutor:
     def _min_order_size(self, token_id: str) -> float:
         try:
             ob = self._client.get_order_book(token_id)
-            return float(getattr(ob, "min_order_size", MIN_SHARES) or MIN_SHARES)
+            value = (
+                ob.get("min_order_size")
+                if isinstance(ob, dict)
+                else getattr(ob, "min_order_size", None)
+            )
+            return float(value or MIN_SHARES)
         except Exception:
             return MIN_SHARES
 
     def _has_asks(self, token_id: str) -> bool:
         try:
             ob = self._client.get_order_book(token_id)
-            return bool(ob.asks)
+            asks = ob.get("asks") if isinstance(ob, dict) else getattr(ob, "asks", None)
+            return bool(asks)
         except Exception:
             return False
 
@@ -209,6 +215,7 @@ class LiveExecutor:
                 for key in (
                     "success", "status", "errorMsg", "message", "orderID",
                     "orderId", "makingAmount", "takingAmount", "size_matched",
+                    "canceled", "not_canceled",
                 )
                 if key in value
             }
@@ -337,10 +344,21 @@ class LiveExecutor:
                 if not cancellation:
                     time.sleep(1.0)
 
+            cancel_confirmed = False
+            cancel_detail = ""
             try:
-                self._client.cancel(order_id)
+                from py_clob_client_v2 import OrderPayload
+
+                cancel_resp = self._client.cancel_order(OrderPayload(orderID=order_id))
+                cancel_source = cancel_resp if isinstance(cancel_resp, dict) else {}
+                cancel_confirmed = order_id in {
+                    str(value) for value in (cancel_source.get("canceled") or [])
+                }
+                cancel_detail = self._safe_detail(cancel_source or cancel_resp)
+                print(f"  [live] GTC cancel: {cancel_detail}")
             except Exception as exc:
-                print(f"  [live] GTC cancel warning: {exc}")
+                cancel_detail = self._safe_detail(exc)
+                print(f"  [live] GTC cancel failed: {cancel_detail}")
             snapshot, price, filled, spent = self._snapshot(order_id, usdc)
             if snapshot:
                 last_price, last_filled, last_spent = price, filled, spent
@@ -348,8 +366,11 @@ class LiveExecutor:
                 return Fill(True, "gtc", self._safe_detail(snapshot), order_id,
                             token_id, "partial_cancelled",
                             last_price or FALLBACK_LIMIT_PRICE, last_filled, last_spent)
-            return Fill(False, "gtc", "GTC unfilled and cancelled", order_id,
-                        token_id, "cancelled")
+            if cancel_confirmed:
+                return Fill(False, "gtc", "GTC unfilled and cancelled", order_id,
+                            token_id, "cancelled")
+            return Fill(False, "gtc", f"GTC unfilled; cancel unconfirmed: {cancel_detail}",
+                        order_id, token_id, "cancel_failed")
         except Exception as e:
             print(f"  [live] GTC fallback failed: {e}")
             return Fill(False, "gtc", self._safe_detail(e), token_id=token_id,

@@ -204,9 +204,12 @@ def test_clob_v2_readiness_rejects_legacy_proxy_signature(monkeypatch):
 
 
 class FakeClient:
-    def __init__(self, snapshots: list[dict], response: dict | None = None):
+    def __init__(self, snapshots: list[dict], response: dict | None = None,
+                 order_book: dict | None = None, cancel_response: dict | None = None):
         self.snapshots = snapshots
         self.response = response or {"success": True, "orderID": "order-1"}
+        self.order_book = order_book or {"asks": [], "min_order_size": "5"}
+        self.cancel_response = cancel_response
         self.cancelled: list[str] = []
         self.market_orders: list[tuple[object, object]] = []
         self.limit_orders: list[tuple[object, object]] = []
@@ -222,8 +225,12 @@ class FakeClient:
     def get_order(self, order_id):
         return self.snapshots.pop(0) if len(self.snapshots) > 1 else self.snapshots[0]
 
-    def cancel(self, order_id):
-        self.cancelled.append(order_id)
+    def get_order_book(self, token_id):
+        return self.order_book
+
+    def cancel_order(self, payload):
+        self.cancelled.append(payload.orderID)
+        return self.cancel_response or {"canceled": [payload.orderID], "not_canceled": {}}
 
 
 def executor_with(client: FakeClient) -> LiveExecutor:
@@ -231,7 +238,6 @@ def executor_with(client: FakeClient) -> LiveExecutor:
     executor._client = client
     executor._prepared_markets = {}
     executor._prepared_balances = {}
-    executor._min_order_size = lambda token: 5
     return executor
 
 
@@ -299,6 +305,33 @@ def test_gtc_cancels_unfilled_remainder_at_close():
     assert fill.ok is False
     assert fill.status == "cancelled"
     assert fake.cancelled == ["order-1"]
+
+
+def test_v2_dict_orderbook_preserves_asks_and_minimum():
+    fake = FakeClient([], order_book={
+        "asks": [{"price": "0.96", "size": "10"}],
+        "min_order_size": "7",
+    })
+    executor = executor_with(fake)
+
+    assert executor._has_asks("token") is True
+    assert executor._min_order_size("token") == 7
+
+
+def test_gtc_does_not_claim_cancel_when_api_did_not_confirm():
+    fake = FakeClient(
+        [{"status": "live", "size_matched": "0", "price": "0.95"}],
+        cancel_response={
+            "canceled": [],
+            "not_canceled": {"order-1": "Order not found or already canceled"},
+        },
+    )
+    fill = executor_with(fake)._try_gtc_fallback(
+        "token", 9.5, int(time.time()))
+
+    assert fill.ok is False
+    assert fill.status == "cancel_failed"
+    assert "cancel unconfirmed" in fill.detail
 
 
 def test_live_executor_prefetches_market_and_balance(monkeypatch):
