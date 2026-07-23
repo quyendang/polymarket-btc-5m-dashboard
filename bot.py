@@ -456,6 +456,26 @@ class TradingEngine:
                     bankroll=bankroll,
                 )
 
+                if not self.config.dry_run:
+                    # Fetch Gamma token IDs and balance at T-40 so the T-5
+                    # deadline is reserved for signing and posting the order.
+                    self._sleep_until(close_ts - TICK_START)
+                    try:
+                        prepared_balance = self.executor.prepare_window(window_ts)
+                        if prepared_balance is not None:
+                            bankroll = min(bankroll, prepared_balance)
+                    except Exception as exc:
+                        self._emit(
+                            "no_trade",
+                            "waiting",
+                            f"Không giao dịch: live preflight thất bại ({exc})",
+                            window_ts=window_ts,
+                        )
+                        if self.config.once:
+                            break
+                        self._sleep_until(close_ts + 1)
+                        continue
+
                 try:
                     sig, delta_pct, reason = run_snipe(
                         window_ts,

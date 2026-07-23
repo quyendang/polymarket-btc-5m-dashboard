@@ -229,6 +229,8 @@ class FakeClient:
 def executor_with(client: FakeClient) -> LiveExecutor:
     executor = object.__new__(LiveExecutor)
     executor._client = client
+    executor._prepared_markets = {}
+    executor._prepared_balances = {}
     executor._min_order_size = lambda token: 5
     return executor
 
@@ -297,3 +299,44 @@ def test_gtc_cancels_unfilled_remainder_at_close():
     assert fill.ok is False
     assert fill.status == "cancelled"
     assert fake.cancelled == ["order-1"]
+
+
+def test_live_executor_prefetches_market_and_balance(monkeypatch):
+    market = type("Market", (), {
+        "slug": "btc-updown-5m-300",
+        "up_token_id": "up-token",
+        "down_token_id": "down-token",
+        "token_for": lambda self, direction: (
+            self.up_token_id if direction == "up" else self.down_token_id),
+    })()
+    executor = executor_with(FakeClient([]))
+    monkeypatch.setattr("execution.markets.fetch_market", lambda window_ts: market)
+    monkeypatch.setattr(executor, "usdc_balance", lambda quiet=False: 28.97)
+
+    assert executor.prepare_window(300) == 28.97
+
+    monkeypatch.setattr(
+        "execution.markets.fetch_market",
+        lambda window_ts: pytest.fail("prepared market should be reused"),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_try_fok",
+        lambda token_id, usdc: __import__("execution").Fill(
+            True, "fok", "matched", token_id=token_id, spent=usdc),
+    )
+    fill = executor.execute(300, int(time.time()) + 5, "down", 5.0)
+
+    assert fill.ok is True
+    assert fill.token_id == "down-token"
+    assert 300 not in executor._prepared_markets
+
+
+def test_live_executor_reports_when_no_fok_was_submitted(monkeypatch):
+    executor = executor_with(FakeClient([]))
+    monkeypatch.setattr("execution.time.time", lambda: 100.0)
+
+    fill = executor.execute(300, 99, "down", 5.0)
+
+    assert fill.ok is False
+    assert fill.detail == "window closed before order preparation"

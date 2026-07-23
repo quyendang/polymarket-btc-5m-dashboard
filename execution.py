@@ -45,6 +45,8 @@ class LiveExecutor:
         if dry_run:
             raise ValueError("LiveExecutor is for live trading only")
         self._client = self._build_client()
+        self._prepared_markets: dict[int, markets.Market] = {}
+        self._prepared_balances: dict[int, Optional[float]] = {}
 
     @staticmethod
     def _build_client():
@@ -115,17 +117,38 @@ class LiveExecutor:
         except Exception:
             return False
 
+    def prepare_window(self, window_ts: int) -> Optional[float]:
+        """Resolve live-only dependencies before the T-10/T-5 snipe window."""
+        market = markets.fetch_market(window_ts)
+        if not market.up_token_id or not market.down_token_id:
+            raise RuntimeError(f"market tokens unavailable for {market.slug}")
+        balance = self.usdc_balance(quiet=True)
+        if balance is None:
+            raise RuntimeError("balance preflight failed before snipe")
+        self._prepared_markets[window_ts] = market
+        self._prepared_balances[window_ts] = balance
+        print(f"  [live] prepared {market.slug} balance=${balance:.2f}")
+        return balance
+
     # --- order placement ---------------------------------------------------
 
     def execute(self, window_ts: int, close_ts: int, direction: str,
                 bet: float, cancellation=None) -> Fill:
-        m = markets.fetch_market(window_ts)
+        prepared_markets = getattr(self, "_prepared_markets", {})
+        prepared_balances = getattr(self, "_prepared_balances", {})
+        m = prepared_markets.pop(window_ts, None)
+        if m is None:
+            if time.time() >= close_ts:
+                return Fill(False, "none", "window closed before order preparation")
+            m = markets.fetch_market(window_ts)
         token = m.token_for(direction)
         if not token:
             return Fill(False, "none", "no token id for direction")
 
         print(f"  [live] target token {token[:16]}… bet=${bet:.2f} dir={direction}")
-        bal = self.usdc_balance()
+        bal = prepared_balances.pop(window_ts, None)
+        if bal is None:
+            bal = self.usdc_balance()
         if bal is not None:
             print(f"  [live] USDC balance ~${bal:.2f}")
             if bal < bet:
@@ -135,12 +158,14 @@ class LiveExecutor:
             return Fill(False, "none", "no funds")
 
         # Primary: FOK market buy, retry until the window closes.
+        last_fill: Optional[Fill] = None
         while time.time() < close_ts:
             if cancellation and cancellation.emergency_requested:
                 return Fill(False, "none", "emergency stop before order", token_id=token)
             fill = self._try_fok(token, bet)
             if fill.ok:
                 return fill
+            last_fill = fill
             # If there's simply no sell-side liquidity, switch to the limit fallback.
             if not self._has_asks(token):
                 print("  [live] no asks — switching to GTC $0.95 limit fallback")
@@ -150,7 +175,13 @@ class LiveExecutor:
             if not cancellation:
                 time.sleep(RETRY_INTERVAL)
 
-        return Fill(False, "none", "window closed before fill", token_id=token)
+        if last_fill is None:
+            detail = "window closed before first FOK submission"
+            kind = "none"
+        else:
+            detail = f"window closed before fill; last FOK: {last_fill.detail}"
+            kind = last_fill.kind
+        return Fill(False, kind, detail, token_id=token, status="expired")
 
     @staticmethod
     def _number(source: dict, *keys: str) -> float:
