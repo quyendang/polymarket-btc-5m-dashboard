@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import time
 
@@ -10,6 +11,7 @@ import pytest
 
 
 TEST_DB = os.path.join(tempfile.gettempdir(), f"polybot-dashboard-{os.getpid()}.db")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 os.environ["APP_ENV"] = "development"
 os.environ["DASHBOARD_DEV_PASSWORD"] = "admin"
