@@ -199,12 +199,15 @@ def real_ask_price(window_ts: int, direction: str) -> Optional[float]:
     Returns None if unavailable so callers fall back to the pricing model.
     """
     try:
-        from py_clob_client.client import ClobClient
+        from py_clob_client_v2 import ClobClient
         m = markets.fetch_market(window_ts)
         token = m.token_for(direction)
         if not token:
             return None
-        client = ClobClient(os.getenv("CLOB_HOST", "https://clob.polymarket.com"))
+        client = ClobClient(
+            host=os.getenv("CLOB_HOST", "https://clob.polymarket.com"),
+            chain_id=137,
+        )
         resp = client.get_price(token, side="BUY")
         price = float(resp.get("price", 0)) if isinstance(resp, dict) else float(resp)
         return price if 0.0 < price < 1.0 else None

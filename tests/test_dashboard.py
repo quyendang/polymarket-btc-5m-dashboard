@@ -189,14 +189,15 @@ class FakeClient:
         self.snapshots = snapshots
         self.response = response or {"success": True, "orderID": "order-1"}
         self.cancelled: list[str] = []
+        self.market_orders: list[tuple[object, object]] = []
+        self.limit_orders: list[tuple[object, object]] = []
 
-    def create_order(self, args):
-        return args
+    def create_and_post_market_order(self, order_args, order_type):
+        self.market_orders.append((order_args, order_type))
+        return self.response
 
-    def create_market_order(self, args):
-        return args
-
-    def post_order(self, signed, order_type):
+    def create_and_post_order(self, order_args, order_type):
+        self.limit_orders.append((order_args, order_type))
         return self.response
 
     def get_order(self, order_id):
@@ -229,6 +230,35 @@ def test_fok_normalizes_amounts_without_exposing_raw_response():
     assert fill.filled_shares == 6.25
     assert fill.average_price == 0.8
     assert "must-not-leak" not in fill.detail
+    assert len(fake.market_orders) == 1
+    assert fake.market_orders[0][1] == "FOK"
+
+
+def test_clob_client_builds_v2_order_schema(monkeypatch):
+    from py_clob_client_v2 import ClobClient, OrderArgs, Side
+
+    # Public Anvil test key used only to verify the local EIP-712 payload shape.
+    client = ClobClient(
+        host="https://clob.polymarket.com",
+        chain_id=137,
+        key="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    )
+    monkeypatch.setattr(client, "get_version", lambda: 2)
+    monkeypatch.setattr(client, "get_tick_size", lambda token_id: "0.01")
+    monkeypatch.setattr(client, "get_neg_risk", lambda token_id: False)
+
+    signed = client.create_order(OrderArgs(
+        token_id="123",
+        price=0.5,
+        size=10,
+        side=Side.BUY,
+    ))
+
+    assert signed.timestamp.isdigit()
+    assert int(signed.timestamp) > 0
+    assert signed.metadata.startswith("0x")
+    assert signed.builder.startswith("0x")
+    assert not hasattr(signed, "nonce")
 
 
 def test_gtc_waits_for_fill_instead_of_treating_post_as_fill():
@@ -238,6 +268,8 @@ def test_gtc_waits_for_fill_instead_of_treating_post_as_fill():
     assert fill.status == "matched"
     assert fill.filled_shares == 10
     assert fill.spent == 9.5
+    assert len(fake.limit_orders) == 1
+    assert fake.limit_orders[0][1] == "GTC"
 
 
 def test_gtc_cancels_unfilled_remainder_at_close():

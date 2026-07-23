@@ -26,10 +26,10 @@ def main() -> None:
     funder = os.getenv("POLY_FUNDER_ADDRESS") or None
     chain_id = 137  # Polygon mainnet
 
-    from py_clob_client.client import ClobClient
+    from py_clob_client_v2 import ClobClient
 
     client = ClobClient(
-        host,
+        host=host,
         key=key,
         chain_id=chain_id,
         signature_type=sig_type,
@@ -37,7 +37,7 @@ def main() -> None:
     )
 
     print("Deriving API credentials from private key...")
-    creds = client.create_or_derive_api_creds()
+    creds = client.create_or_derive_api_key()
 
     print("\nPaste these into your .env:\n")
     print(f"POLY_API_KEY={creds.api_key}")

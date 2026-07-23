@@ -48,8 +48,7 @@ class LiveExecutor:
 
     @staticmethod
     def _build_client():
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import ApiCreds
+        from py_clob_client_v2 import ApiCreds, ClobClient
 
         host = os.getenv("CLOB_HOST", "https://clob.polymarket.com")
         key = os.getenv("POLY_PRIVATE_KEY")
@@ -65,7 +64,7 @@ class LiveExecutor:
             api_passphrase=os.getenv("POLY_API_PASSPHRASE"),
         )
         client = ClobClient(
-            host,
+            host=host,
             key=key,
             chain_id=137,
             creds=creds,
@@ -79,7 +78,7 @@ class LiveExecutor:
 
     def usdc_balance(self, quiet: bool = False) -> Optional[float]:
         try:
-            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            from py_clob_client_v2 import AssetType, BalanceAllowanceParams
             resp = self._client.get_balance_allowance(
                 BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
             # Balances are returned in USDC base units (6 decimals).
@@ -207,17 +206,20 @@ class LiveExecutor:
 
     def _try_fok(self, token_id: str, usdc: float) -> Fill:
         try:
-            from py_clob_client.clob_types import MarketOrderArgs, OrderType
-            from py_clob_client.order_builder.constants import BUY
+            from py_clob_client_v2 import MarketOrderArgs, OrderType, Side
 
             args = MarketOrderArgs(
                 token_id=token_id,
                 amount=round(usdc, 2),     # for BUY, amount = USDC to spend
-                side=BUY,
+                side=Side.BUY,
                 order_type=OrderType.FOK,
             )
-            signed = self._client.create_market_order(args)
-            resp = self._client.post_order(signed, OrderType.FOK)
+            # The V2 helper refreshes /version, rebuilds, and retries once if the
+            # CLOB changes its active order version between signing and posting.
+            resp = self._client.create_and_post_market_order(
+                order_args=args,
+                order_type=OrderType.FOK,
+            )
             source = resp if isinstance(resp, dict) else {}
             ok = bool(resp) and source.get("success", True) is not False
             order_id = self._order_id(source)
@@ -246,8 +248,7 @@ class LiveExecutor:
     def _try_gtc_fallback(self, token_id: str, usdc: float, close_ts: int,
                           cancellation=None) -> Fill:
         try:
-            from py_clob_client.clob_types import OrderArgs, OrderType
-            from py_clob_client.order_builder.constants import BUY
+            from py_clob_client_v2 import OrderArgs, OrderType, Side
 
             min_size = max(self._min_order_size(token_id), MIN_SHARES)
             size = max(usdc / FALLBACK_LIMIT_PRICE, min_size)
@@ -260,10 +261,12 @@ class LiveExecutor:
                 token_id=token_id,
                 price=FALLBACK_LIMIT_PRICE,
                 size=round(size, 2),
-                side=BUY,
+                side=Side.BUY,
             )
-            signed = self._client.create_order(args)
-            resp = self._client.post_order(signed, OrderType.GTC)
+            resp = self._client.create_and_post_order(
+                order_args=args,
+                order_type=OrderType.GTC,
+            )
             source = resp if isinstance(resp, dict) else {}
             posted = bool(resp) and source.get("success", True) is not False
             order_id = self._order_id(source)

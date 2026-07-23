@@ -24,7 +24,7 @@ The bot has 6 files:
 ### Dependencies
 
 ```
-py-clob-client==0.34.5   # Polymarket's official CLOB trading client
+py-clob-client-v2==1.1.0 # Polymarket's official CLOB V2 trading client
 python-dotenv>=1.0.0      # .env file loading
 requests>=2.31.0          # HTTP calls to Binance + Polymarket APIs
 playwright>=1.40.0        # Browser automation for auto-claiming wins

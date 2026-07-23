@@ -31,7 +31,7 @@ def credentials_complete(presence: dict[str, bool], signature_type: int) -> bool
         "POLY_PRIVATE_KEY", "POLY_API_KEY", "POLY_API_SECRET",
         "POLY_API_PASSPHRASE",
     ]
-    if signature_type in (1, 2):
+    if signature_type in (1, 2, 3):
         required.append("POLY_FUNDER_ADDRESS")
     return all(presence.get(name, False) for name in required)
 

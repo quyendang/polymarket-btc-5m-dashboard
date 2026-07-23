@@ -32,7 +32,7 @@ def refresh_readiness() -> dict:
         signature_type = int(os.getenv("POLY_SIGNATURE_TYPE", "1"))
     except ValueError:
         signature_type = -1
-    complete = signature_type in (0, 1, 2) and credentials_complete(
+    complete = signature_type in (0, 1, 2, 3) and credentials_complete(
         presence, signature_type)
     state = {
         "credentials": presence,
@@ -41,7 +41,7 @@ def refresh_readiness() -> dict:
         "balance_check_ok": False,
         "usdc_balance": None,
         "live_trading_enabled": settings.live_trading_enabled,
-        "signature_type": signature_type if signature_type in (0, 1, 2) else None,
+        "signature_type": signature_type if signature_type in (0, 1, 2, 3) else None,
         "preflight_at": utcnow().isoformat(),
     }
     if complete:

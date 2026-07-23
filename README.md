@@ -49,8 +49,9 @@ python setup_creds.py       # paste output into .env
 > **Notes from build validation**
 > - Binance's main API is geo-blocked in the US (HTTP 451); the bot uses
 >   `data-api.binance.vision` automatically.
-> - `py-clob-client==0.34.5` is archived upstream but verified working for our
->   reads/orders on Python 3.14 during Phase 0.
+> - Live orders use Polymarket's `py-clob-client-v2==1.1.0`. The V2 client
+>   resolves the active CLOB order version before signing and retries once if
+>   that version changes while an order is being submitted.
 
 ## Running
 
