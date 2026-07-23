@@ -25,6 +25,7 @@ from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import WorkerHeartbeat, utcnow  # noqa: E402
 from app import trader_worker  # noqa: E402
+from app.readiness import credentials_complete  # noqa: E402
 from execution import LiveExecutor  # noqa: E402
 from guide import GUIDE  # noqa: E402
 
@@ -182,6 +183,24 @@ def test_trader_worker_rechecks_live_readiness_before_engine(monkeypatch):
     ready = {**blocked, "api_valid": True, "usdc_balance": 29.0}
     monkeypatch.setattr(trader_worker, "refresh_readiness", lambda: ready)
     trader_worker.assert_live_ready()
+
+
+def test_clob_v2_readiness_rejects_legacy_proxy_signature(monkeypatch):
+    presence = {
+        "POLY_PRIVATE_KEY": True,
+        "POLY_API_KEY": True,
+        "POLY_API_SECRET": True,
+        "POLY_API_PASSPHRASE": True,
+        "POLY_FUNDER_ADDRESS": True,
+    }
+    assert credentials_complete(presence, 3) is True
+
+    monkeypatch.setattr(trader_worker, "credential_presence", lambda: presence)
+    monkeypatch.setenv("POLY_SIGNATURE_TYPE", "1")
+    state = trader_worker.refresh_readiness()
+    assert state["credentials_complete"] is False
+    assert state["api_valid"] is False
+    assert state["signature_type"] == 1
 
 
 class FakeClient:

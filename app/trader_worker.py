@@ -29,10 +29,12 @@ def refresh_readiness() -> dict:
     """Validate live credentials inside trader-worker and publish no secrets."""
     presence = credential_presence()
     try:
-        signature_type = int(os.getenv("POLY_SIGNATURE_TYPE", "1"))
+        signature_type = int(os.getenv("POLY_SIGNATURE_TYPE", "3"))
     except ValueError:
         signature_type = -1
-    complete = signature_type in (0, 1, 2, 3) and credentials_complete(
+    # CLOB V2 rejects legacy proxy/Safe makers. EOA remains available only for
+    # accounts Polymarket has explicitly allowlisted; Deposit Wallet is default.
+    complete = signature_type in (0, 3) and credentials_complete(
         presence, signature_type)
     state = {
         "credentials": presence,

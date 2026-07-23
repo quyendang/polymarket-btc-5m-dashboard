@@ -57,6 +57,18 @@ class LiveExecutor:
         api_key = os.getenv("POLY_API_KEY")
         if not api_key:
             raise SystemExit("API creds missing — run setup_creds.py first.")
+        signature_type = int(os.getenv("POLY_SIGNATURE_TYPE", "3"))
+        funder = os.getenv("POLY_FUNDER_ADDRESS") or None
+        if signature_type in (1, 2):
+            raise SystemExit(
+                "Legacy proxy/Safe makers are not accepted by CLOB V2. "
+                "Use the Deposit Wallet flow with POLY_SIGNATURE_TYPE=3."
+            )
+        if signature_type == 3 and not funder:
+            raise SystemExit(
+                "POLY_FUNDER_ADDRESS must be the Deposit Wallet address "
+                "when POLY_SIGNATURE_TYPE=3."
+            )
 
         creds = ApiCreds(
             api_key=api_key,
@@ -68,8 +80,8 @@ class LiveExecutor:
             key=key,
             chain_id=137,
             creds=creds,
-            signature_type=int(os.getenv("POLY_SIGNATURE_TYPE", "1")),
-            funder=os.getenv("POLY_FUNDER_ADDRESS") or None,
+            signature_type=signature_type,
+            funder=funder,
         )
         client.set_api_creds(creds)
         return client

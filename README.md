@@ -52,6 +52,10 @@ python setup_creds.py       # paste output into .env
 > - Live orders use Polymarket's `py-clob-client-v2==1.1.0`. The V2 client
 >   resolves the active CLOB order version before signing and retries once if
 >   that version changes while an order is being submitted.
+> - Standard accounts must use the Deposit Wallet flow:
+>   `POLY_SIGNATURE_TYPE=3` and `POLY_FUNDER_ADDRESS=<deposit wallet>`. Legacy
+>   proxy/Safe maker types `1` and `2` are rejected by CLOB V2. Trading
+>   collateral is pUSD, so plain USDC in another Polygon address is not enough.
 
 ## Running
 
