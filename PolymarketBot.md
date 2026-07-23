@@ -201,8 +201,8 @@ If Binance is unreachable, poll Polymarket's API for the market's outcome prices
 
 ## Setup Requirements
 
-1. **Polymarket account** with USDC on Polygon network
-2. **Private key** exported from your Polymarket wallet
+1. **Polymarket account** with pUSD collateral available in its Deposit Wallet
+2. **Private key** of the EOA signer used to log in with the wallet
 3. **API credentials** — derived from the private key using `setup_creds.py`
 4. **`.env` file** with your credentials and settings:
 
@@ -211,12 +211,18 @@ POLY_PRIVATE_KEY=0x...your_private_key...
 POLY_API_KEY=...derived...
 POLY_API_SECRET=...derived...
 POLY_API_PASSPHRASE=...derived...
-POLY_FUNDER_ADDRESS=0x...your_proxy_wallet...
-POLY_SIGNATURE_TYPE=1
+POLY_FUNDER_ADDRESS=0x...your_deposit_wallet...
+POLY_SIGNATURE_TYPE=3
 STARTING_BANKROLL=1.0
 MIN_BET=1.0
 BOT_MODE=safe
 ```
+
+For CLOB V2 Deposit Wallet accounts, the private key belongs to the EOA signer
+while `POLY_FUNDER_ADDRESS` is the separate Deposit Wallet shown by Polymarket.
+Signature types `1` and `2` are legacy proxy/Safe flows and are not used by this
+bot. Type `0` is kept only for Polymarket-allowlisted EOAs and ignores
+`POLY_FUNDER_ADDRESS`.
 
 5. **Python 3.10+** with a virtual environment:
 

@@ -51,32 +51,49 @@ class LiveExecutor:
 
     @staticmethod
     def _build_client():
-        from py_clob_client_v2 import ApiCreds, ClobClient
+        from py_clob_client_v2 import ApiCreds, ClobClient, SignatureTypeV2
 
         host = os.getenv("CLOB_HOST", "https://clob.polymarket.com")
         key = os.getenv("POLY_PRIVATE_KEY")
         if not key or key.startswith("0x..."):
             raise SystemExit("POLY_PRIVATE_KEY not set — cannot trade live.")
-        api_key = os.getenv("POLY_API_KEY")
-        if not api_key:
-            raise SystemExit("API creds missing — run setup_creds.py first.")
-        signature_type = int(os.getenv("POLY_SIGNATURE_TYPE", "3"))
+        credential_values = {
+            "POLY_API_KEY": os.getenv("POLY_API_KEY"),
+            "POLY_API_SECRET": os.getenv("POLY_API_SECRET"),
+            "POLY_API_PASSPHRASE": os.getenv("POLY_API_PASSPHRASE"),
+        }
+        missing = [name for name, value in credential_values.items() if not value]
+        if missing:
+            raise SystemExit(
+                f"API creds missing ({', '.join(missing)}) — run setup_creds.py first."
+            )
+        try:
+            signature_type = SignatureTypeV2(
+                int(os.getenv("POLY_SIGNATURE_TYPE", "3")))
+        except (TypeError, ValueError):
+            raise SystemExit("POLY_SIGNATURE_TYPE must be 0 (EOA) or 3 (Deposit Wallet).")
         funder = os.getenv("POLY_FUNDER_ADDRESS") or None
-        if signature_type in (1, 2):
+        if signature_type not in (
+            SignatureTypeV2.EOA,
+            SignatureTypeV2.POLY_1271,
+        ):
             raise SystemExit(
                 "Legacy proxy/Safe makers are not accepted by CLOB V2. "
                 "Use the Deposit Wallet flow with POLY_SIGNATURE_TYPE=3."
             )
-        if signature_type == 3 and not funder:
+        if signature_type == SignatureTypeV2.POLY_1271 and not funder:
             raise SystemExit(
                 "POLY_FUNDER_ADDRESS must be the Deposit Wallet address "
                 "when POLY_SIGNATURE_TYPE=3."
             )
+        client_funder = (
+            funder if signature_type == SignatureTypeV2.POLY_1271 else None
+        )
 
         creds = ApiCreds(
-            api_key=api_key,
-            api_secret=os.getenv("POLY_API_SECRET"),
-            api_passphrase=os.getenv("POLY_API_PASSPHRASE"),
+            api_key=credential_values["POLY_API_KEY"],
+            api_secret=credential_values["POLY_API_SECRET"],
+            api_passphrase=credential_values["POLY_API_PASSPHRASE"],
         )
         client = ClobClient(
             host=host,
@@ -84,7 +101,7 @@ class LiveExecutor:
             chain_id=137,
             creds=creds,
             signature_type=signature_type,
-            funder=funder,
+            funder=client_funder,
         )
         client.set_api_creds(creds)
         return client

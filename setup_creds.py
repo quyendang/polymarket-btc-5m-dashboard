@@ -22,27 +22,31 @@ def main() -> None:
         raise SystemExit("Set POLY_PRIVATE_KEY in your .env first.")
 
     host = os.getenv("CLOB_HOST", "https://clob.polymarket.com")
-    sig_type = int(os.getenv("POLY_SIGNATURE_TYPE", "3"))
+    from py_clob_client_v2 import ClobClient, SignatureTypeV2
+
+    try:
+        sig_type = SignatureTypeV2(int(os.getenv("POLY_SIGNATURE_TYPE", "3")))
+    except (TypeError, ValueError):
+        raise SystemExit("POLY_SIGNATURE_TYPE must be 0 (EOA) or 3 (Deposit Wallet).")
     funder = os.getenv("POLY_FUNDER_ADDRESS") or None
-    if sig_type in (1, 2):
+    if sig_type not in (SignatureTypeV2.EOA, SignatureTypeV2.POLY_1271):
         raise SystemExit(
             "CLOB V2 no longer accepts legacy proxy/Safe makers. "
             "Use POLY_SIGNATURE_TYPE=3 with your Deposit Wallet address."
         )
-    if sig_type == 3 and not funder:
+    if sig_type == SignatureTypeV2.POLY_1271 and not funder:
         raise SystemExit(
             "Set POLY_FUNDER_ADDRESS to your Deposit Wallet address first."
         )
+    client_funder = funder if sig_type == SignatureTypeV2.POLY_1271 else None
     chain_id = 137  # Polygon mainnet
-
-    from py_clob_client_v2 import ClobClient
 
     client = ClobClient(
         host=host,
         key=key,
         chain_id=chain_id,
         signature_type=sig_type,
-        funder=funder,
+        funder=client_funder,
     )
 
     print("Deriving API credentials from private key...")

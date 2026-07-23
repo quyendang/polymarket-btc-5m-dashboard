@@ -7,6 +7,8 @@ import sys
 import tempfile
 import time
 from datetime import timedelta
+from importlib.metadata import version
+from inspect import signature
 
 import pytest
 
@@ -248,6 +250,68 @@ def test_clob_v2_readiness_rejects_legacy_proxy_signature(monkeypatch):
     assert state["signature_type"] == 1
 
 
+def test_clob_v2_runtime_contract_matches_pinned_client():
+    from py_clob_client_v2 import (
+        ClobClient,
+        MarketOrderArgs,
+        MarketOrderArgsV2,
+        OrderArgs,
+        OrderArgsV2,
+        OrderPayload,
+        SignatureTypeV2,
+    )
+
+    assert version("py-clob-client-v2") == "1.1.0"
+    assert MarketOrderArgs is MarketOrderArgsV2
+    assert OrderArgs is OrderArgsV2
+    assert int(SignatureTypeV2.EOA) == 0
+    assert int(SignatureTypeV2.POLY_1271) == 3
+    assert list(signature(ClobClient.get_order).parameters) == ["self", "order_id"]
+    assert list(signature(ClobClient.cancel_order).parameters) == ["self", "payload"]
+    assert list(signature(OrderPayload).parameters) == ["orderID"]
+
+
+def test_live_client_uses_deposit_wallet_for_signature_type_3(monkeypatch):
+    from py_clob_client_v2 import SignatureTypeV2
+
+    signer_key = (
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    )
+    deposit_wallet = "0x45b31Fc27CC5b7b493e3071E663268cE28090532"
+    monkeypatch.setenv("POLY_PRIVATE_KEY", signer_key)
+    monkeypatch.setenv("POLY_API_KEY", "api-key")
+    monkeypatch.setenv("POLY_API_SECRET", "api-secret")
+    monkeypatch.setenv("POLY_API_PASSPHRASE", "api-passphrase")
+    monkeypatch.setenv("POLY_SIGNATURE_TYPE", "3")
+    monkeypatch.setenv("POLY_FUNDER_ADDRESS", deposit_wallet)
+
+    client = LiveExecutor._build_client()
+
+    assert client.builder.signature_type == SignatureTypeV2.POLY_1271
+    assert client.builder.funder == deposit_wallet
+
+
+def test_live_client_ignores_funder_for_eoa_signature_type(monkeypatch):
+    from py_clob_client_v2 import SignatureTypeV2
+
+    signer_key = (
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    )
+    signer_address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    monkeypatch.setenv("POLY_PRIVATE_KEY", signer_key)
+    monkeypatch.setenv("POLY_API_KEY", "api-key")
+    monkeypatch.setenv("POLY_API_SECRET", "api-secret")
+    monkeypatch.setenv("POLY_API_PASSPHRASE", "api-passphrase")
+    monkeypatch.setenv("POLY_SIGNATURE_TYPE", "0")
+    monkeypatch.setenv(
+        "POLY_FUNDER_ADDRESS", "0x45b31Fc27CC5b7b493e3071E663268cE28090532")
+
+    client = LiveExecutor._build_client()
+
+    assert client.builder.signature_type == SignatureTypeV2.EOA
+    assert client.builder.funder == signer_address
+
+
 class FakeClient:
     def __init__(self, snapshots: list[dict], response: dict | None = None,
                  order_book: dict | None = None, cancel_response: dict | None = None):
@@ -347,6 +411,42 @@ def test_clob_client_builds_v2_order_schema(monkeypatch):
 
     assert signed.timestamp.isdigit()
     assert int(signed.timestamp) > 0
+    assert signed.metadata.startswith("0x")
+    assert signed.builder.startswith("0x")
+    assert not hasattr(signed, "nonce")
+
+
+def test_clob_client_builds_deposit_wallet_v2_order_schema(monkeypatch):
+    from py_clob_client_v2 import (
+        ClobClient,
+        OrderArgs,
+        Side,
+        SignatureTypeV2,
+    )
+
+    deposit_wallet = "0x45b31Fc27CC5b7b493e3071E663268cE28090532"
+    client = ClobClient(
+        host="https://clob.polymarket.com",
+        chain_id=137,
+        key="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        signature_type=SignatureTypeV2.POLY_1271,
+        funder=deposit_wallet,
+    )
+    monkeypatch.setattr(client, "get_version", lambda: 2)
+    monkeypatch.setattr(client, "get_tick_size", lambda token_id: "0.01")
+    monkeypatch.setattr(client, "get_neg_risk", lambda token_id: False)
+
+    signed = client.create_order(OrderArgs(
+        token_id="123",
+        price=0.5,
+        size=10,
+        side=Side.BUY,
+    ))
+
+    assert signed.maker == deposit_wallet
+    assert signed.signer == deposit_wallet
+    assert signed.signatureType == SignatureTypeV2.POLY_1271
+    assert signed.timestamp.isdigit()
     assert signed.metadata.startswith("0x")
     assert signed.builder.startswith("0x")
     assert not hasattr(signed, "nonce")
