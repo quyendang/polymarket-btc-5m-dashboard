@@ -51,6 +51,13 @@ def main() -> None:
         start_health_server(role)
         worker_main()
         return
+    if role == "claim-worker":
+        from app.claim_worker import main as worker_main
+        from app.worker_health import start_health_server
+
+        start_health_server(role)
+        worker_main()
+        return
     raise SystemExit(f"Unknown SERVICE_ROLE: {role}")
 
 

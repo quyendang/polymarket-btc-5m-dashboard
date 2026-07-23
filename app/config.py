@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     dashboard_dev_password: str = "admin"
     session_secret: str = "development-session-secret-change-me"
     live_trading_enabled: bool = False
+    auto_claim_enabled: bool = False
+    claim_poll_seconds: int = 5
+    claim_resolution_retry_seconds: int = 30
+    claim_retry_base_seconds: int = 15
+    claim_max_attempts: int = 5
+    claim_reconcile_seconds: int = 600
     service_role: str = "web"
     timezone: str = Field(default="Asia/Ho_Chi_Minh", alias="TZ")
     event_retention_days: int = 30

@@ -19,7 +19,7 @@ The bot has 6 files:
 | `compare_runs.py` | Backtesting tool — tests multiple configs, outputs Excel comparison |
 | `backtest.py` | Historical candle fetcher (used by compare_runs.py) |
 | `setup_creds.py` | One-time setup — derives Polymarket API credentials from private key |
-| `auto_claim.py` | Background auto-claimer for winning positions (uses Playwright) |
+| `auto_claim.py` | Compatibility entry point for the isolated relayer claim worker |
 
 ### Dependencies
 
@@ -27,7 +27,7 @@ The bot has 6 files:
 py-clob-client-v2==1.1.0 # Polymarket's official CLOB V2 trading client
 python-dotenv>=1.0.0      # .env file loading
 requests>=2.31.0          # HTTP calls to Binance + Polymarket APIs
-playwright>=1.40.0        # Browser automation for auto-claiming wins
+polymarket-client==0.1.0  # Official SDK for Deposit Wallet redemption
 openpyxl>=3.1.0           # Excel output for comparison tool
 ```
 

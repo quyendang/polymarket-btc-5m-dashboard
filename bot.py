@@ -587,6 +587,8 @@ class TradingEngine:
                     fill_payload = {
                         "order_kind": fill.kind,
                         "order_id": fill.order_id,
+                        "condition_id": fill.condition_id,
+                        "token_id": fill.token_id,
                         "entry_price": entry,
                         "shares": shares,
                         "spent": spent,

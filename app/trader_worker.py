@@ -172,6 +172,8 @@ class DatabaseEventSink:
                     bankroll_after=float(payload.get("bankroll_after", 0)),
                     order_kind=str(payload.get("order_kind", "unknown")),
                     order_id=payload.get("order_id"),
+                    condition_id=payload.get("condition_id"),
+                    token_id=payload.get("token_id"),
                     claim_required=claim_required,
                     claim_status="pending" if claim_required else "not_required",
                 ))

@@ -43,8 +43,17 @@ export interface Trade {
   bankroll_after: number;
   order_kind: string;
   order_id: string | null;
+  condition_id: string | null;
+  token_id: string | null;
   claim_required: boolean;
   claim_status: string;
+  claim_transaction_id: string | null;
+  claim_transaction_hash: string | null;
+  claim_attempts: number;
+  claim_error: string | null;
+  claim_next_attempt_at: string | null;
+  claim_updated_at: string | null;
+  claimed_at: string | null;
   market_url: string;
   created_at: string;
 }
@@ -96,6 +105,24 @@ export interface TraderReadiness {
   can_start_live: boolean;
 }
 
+export interface ClaimReadiness {
+  worker_online: boolean;
+  worker_stale: boolean;
+  worker_status: string;
+  last_seen: string | null;
+  auto_claim_enabled: boolean;
+  credentials: Record<string, boolean>;
+  credentials_complete: boolean;
+  sdk_ready: boolean;
+  auth_mode: string | null;
+  clob_auth_mode: string | null;
+  wallet: string | null;
+  pending_claims: number;
+  failed_claims: number;
+  last_error: string | null;
+  can_auto_claim: boolean;
+}
+
 export interface Snapshot {
   guide_profile: string;
   active_run: BotRun | null;
@@ -105,6 +132,7 @@ export interface Snapshot {
   events: EngineEvent[];
   workers: Worker[];
   trader_readiness: TraderReadiness;
+  claim_readiness: ClaimReadiness;
   stats: { trades: number; pnl: number; wins: number };
 }
 
@@ -113,6 +141,7 @@ export interface DashboardSettings {
   live_trading_enabled: boolean;
   environment: Record<string, boolean>;
   trader_readiness: TraderReadiness;
+  claim_readiness: ClaimReadiness;
   database: string;
   timezone: string;
   password_hash_configured: boolean;

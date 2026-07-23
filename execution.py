@@ -39,6 +39,7 @@ class Fill:
     average_price: float = 0.0
     filled_shares: float = 0.0
     spent: float = 0.0
+    condition_id: Optional[str] = None
 
 
 class LiveExecutor:
@@ -194,6 +195,7 @@ class LiveExecutor:
             if cancellation and cancellation.emergency_requested:
                 return Fill(False, "none", "emergency stop before order", token_id=token)
             fill = self._try_fok(token, bet)
+            fill.condition_id = getattr(m, "condition_id", None)
             if fill.ok:
                 return fill
             last_fill = fill
@@ -215,7 +217,9 @@ class LiveExecutor:
             asks_state = self._has_asks(token)
             if asks_state is False:
                 print("  [live] no asks — switching to GTC $0.95 limit fallback")
-                return self._try_gtc_fallback(token, bet, close_ts, cancellation)
+                fallback = self._try_gtc_fallback(token, bet, close_ts, cancellation)
+                fallback.condition_id = getattr(m, "condition_id", None)
+                return fallback
             if asks_state is None:
                 print("  [live] orderbook unavailable — keeping FOK retry path")
             if cancellation and cancellation.wait(RETRY_INTERVAL):

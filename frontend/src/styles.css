@@ -201,6 +201,12 @@ th:first-child, td:first-child { padding-left: 0; }
 .direction.up { color: var(--up); background: var(--up-soft); }
 .direction.down { color: var(--down); background: var(--down-soft); }
 .claim-link { color: var(--signal); text-decoration: none; font-weight: 600; }
+.claim-state { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.claim-state.claimed, .claim-state.acknowledged { color: var(--up); }
+.claim-state.failed, .claim-state.manual_required { color: var(--down); }
+.claim-state.pending, .claim-state.checking, .claim-state.awaiting_resolution,
+.claim-state.submitting, .claim-state.submitted { color: var(--signal); }
+.claim-retry { width: 28px; height: 28px; background: transparent; }
 .empty-state { min-height: 120px; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--muted); text-align: center; }
 .empty-state p { margin: 0; max-width: 340px; white-space: normal; }
 .page-intro, .system-band { min-height: 150px; padding: 24px 0; display: flex; align-items: center; justify-content: space-between; gap: 30px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -237,7 +243,7 @@ th:first-child, td:first-child { padding-left: 0; }
 .guide-badge div { display: grid; gap: 3px; }
 .guide-badge small { color: var(--muted); font-size: 9px; }
 .guide-badge b { font-family: "IBM Plex Mono", monospace; font-size: 11px; }
-.settings-grid { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .settings-section { padding: 20px; }
 .settings-section:first-child { padding-left: 0; }
 .settings-section + .settings-section { border-left: 1px solid var(--line); }
@@ -261,7 +267,7 @@ th:first-child, td:first-child { padding-left: 0; }
 .run-strip small, .run-strip span { color: var(--muted); font-size: 9px; }
 .run-strip b { font-size: 10px; text-transform: uppercase; }
 .system-band svg { color: var(--signal); }
-.worker-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.worker-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .worker-block { padding: 20px; border-left: 1px solid var(--line); display: grid; gap: 10px; }
 .worker-block:first-child { padding-left: 0; border-left: 0; }
 .worker-block > div { display: flex; align-items: center; gap: 9px; font-size: 11px; }

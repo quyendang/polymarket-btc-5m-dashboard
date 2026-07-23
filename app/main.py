@@ -21,6 +21,7 @@ import data
 import markets
 from app.backtests import workbook_bytes
 from app.config import settings
+from app.claim_readiness import claim_readiness
 from app.database import SessionLocal, get_db, init_db
 from app.models import AuditLog, BacktestJob, BotRun, EngineEvent, Trade, WorkerHeartbeat, utcnow
 from app.readiness import trader_readiness
@@ -126,8 +127,17 @@ def trade_dict(item: Trade) -> dict:
         "bankroll_after": item.bankroll_after,
         "order_kind": item.order_kind,
         "order_id": item.order_id,
+        "condition_id": item.condition_id,
+        "token_id": item.token_id,
         "claim_required": item.claim_required,
         "claim_status": item.claim_status,
+        "claim_transaction_id": item.claim_transaction_id,
+        "claim_transaction_hash": item.claim_transaction_hash,
+        "claim_attempts": item.claim_attempts,
+        "claim_error": item.claim_error,
+        "claim_next_attempt_at": iso(item.claim_next_attempt_at),
+        "claim_updated_at": iso(item.claim_updated_at),
+        "claimed_at": iso(item.claimed_at),
         "market_url": f"https://polymarket.com/event/{item.slug}",
         "created_at": iso(item.created_at),
     }
@@ -256,6 +266,7 @@ def dashboard_snapshot(db: Session = Depends(get_db)) -> dict:
                func.coalesce(func.sum(func.cast(Trade.won, Integer)), 0))
     ).one()
     readiness = live_readiness(db)
+    claims = claim_readiness(db)
     return {
         "guide_profile": GUIDE.profile_id,
         "active_run": run_dict(active),
@@ -269,6 +280,7 @@ def dashboard_snapshot(db: Session = Depends(get_db)) -> dict:
             for item in workers
         ],
         "trader_readiness": readiness,
+        "claim_readiness": claims,
         "stats": {"trades": totals[0], "pnl": float(totals[1]), "wins": int(totals[2])},
     }
 
@@ -404,7 +416,30 @@ def acknowledge_claim(trade_id: str, request: Request, db: Session = Depends(get
     if not item or not item.claim_required:
         raise HTTPException(status_code=404, detail="Không có vị thế cần claim.")
     item.claim_status = "acknowledged"
+    item.claim_error = None
+    item.claim_next_attempt_at = None
+    item.claim_updated_at = utcnow()
+    item.claimed_at = utcnow()
     audit(db, request, "claim_acknowledged", {"trade_id": trade_id})
+    db.commit()
+    return trade_dict(item)
+
+
+@app.post("/api/trades/{trade_id}/claim", dependencies=[Depends(require_csrf)])
+def queue_claim(trade_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    item = db.get(Trade, trade_id)
+    if not item or not item.claim_required or not item.won:
+        raise HTTPException(status_code=404, detail="Không có vị thế thắng cần claim.")
+    if item.claim_status in ("claimed", "acknowledged"):
+        raise HTTPException(status_code=409, detail="Vị thế đã được xử lý.")
+    if item.claim_status in ("checking", "submitting", "submitted"):
+        raise HTTPException(status_code=409, detail="Claim đang được xử lý.")
+    item.claim_status = "pending"
+    item.claim_attempts = 0
+    item.claim_error = None
+    item.claim_next_attempt_at = None
+    item.claim_updated_at = utcnow()
+    audit(db, request, "claim_queued", {"trade_id": trade_id})
     db.commit()
     return trade_dict(item)
 
@@ -459,6 +494,7 @@ def download_backtest(job_id: str, db: Session = Depends(get_db)) -> StreamingRe
 @app.get("/api/settings", dependencies=[Depends(require_auth)])
 def get_settings_view(db: Session = Depends(get_db)) -> dict:
     readiness = live_readiness(db)
+    claims = claim_readiness(db)
     return {
         "guide": {
             "profile_id": GUIDE.profile_id,
@@ -477,6 +513,7 @@ def get_settings_view(db: Session = Depends(get_db)) -> dict:
         "live_trading_enabled": settings.live_trading_enabled,
         "environment": readiness["credentials"],
         "trader_readiness": readiness,
+        "claim_readiness": claims,
         "database": "postgresql" if settings.sqlalchemy_url.startswith("postgresql") else "sqlite",
         "timezone": settings.timezone,
         "password_hash_configured": bool(settings.dashboard_password_hash),
@@ -494,6 +531,7 @@ def system_health(db: Session = Depends(get_db)) -> dict:
     return {
         "web": {"status": "healthy", "guide_profile": GUIDE.profile_id},
         "trader_readiness": live_readiness(db),
+        "claim_readiness": claim_readiness(db),
         "workers": [
             {
                 "role": item.role,

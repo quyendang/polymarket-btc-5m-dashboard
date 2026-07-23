@@ -64,3 +64,7 @@ export function createBacktest(payload: Record<string, number>) {
 export function acknowledgeClaim(id: string) {
   return request<Trade>(`/api/trades/${id}/claim-acknowledge`, { method: "POST" });
 }
+
+export function queueClaim(id: string) {
+  return request<Trade>(`/api/trades/${id}/claim`, { method: "POST" });
+}

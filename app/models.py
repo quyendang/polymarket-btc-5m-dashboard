@@ -68,8 +68,17 @@ class Trade(Base):
     bankroll_after: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     order_kind: Mapped[str] = mapped_column(String(24), nullable=False)
     order_id: Mapped[str | None] = mapped_column(String(128))
+    condition_id: Mapped[str | None] = mapped_column(String(66), index=True)
+    token_id: Mapped[str | None] = mapped_column(String(128))
     claim_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     claim_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_required")
+    claim_transaction_id: Mapped[str | None] = mapped_column(String(128))
+    claim_transaction_hash: Mapped[str | None] = mapped_column(String(128))
+    claim_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    claim_error: Mapped[str | None] = mapped_column(Text)
+    claim_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     run: Mapped[BotRun] = relationship(back_populates="trades")
@@ -125,3 +134,4 @@ class WorkerHeartbeat(Base):
 
 Index("ix_bot_runs_active", BotRun.status, BotRun.created_at)
 Index("ix_trades_run_window", Trade.run_id, Trade.window_ts)
+Index("ix_trades_claim_queue", Trade.claim_status, Trade.claim_next_attempt_at)

@@ -26,8 +26,9 @@ then snipes an Up/Down token seconds before the window closes. Built from
 | `compare_runs.py` | 27-config backtest matrix → Excel (3 sheets) |
 | `execution.py` | Live order engine (FOK market buy + GTC $0.95 fallback) |
 | `setup_creds.py` | Derive Polymarket API creds from private key |
-| `auto_claim.py` | Experimental Playwright auto-claimer scaffold; verify selectors before relying on it |
-| `app/` | FastAPI dashboard, PostgreSQL models, auth, trader/backtest workers |
+| `auto_claim.py` | Compatibility entry point for the relayer-backed claim worker |
+| `claiming.py` | Official SDK adapter for Deposit Wallet redemption |
+| `app/` | FastAPI dashboard, PostgreSQL models, auth, trader/backtest/claim workers |
 | `frontend/` | React + TypeScript operations dashboard |
 | `tests/` | Unit tests for strategy, pricing, bet sizing, scoring |
 
@@ -91,6 +92,9 @@ SERVICE_ROLE=trader-worker PORT=8001 python -m app.entrypoint
 
 # terminal 3: backtest worker
 SERVICE_ROLE=backtest-worker PORT=8002 python -m app.entrypoint
+
+# terminal 4: browser-free claim worker
+SERVICE_ROLE=claim-worker PORT=8003 python -m app.entrypoint
 ```
 
 Open `http://localhost:8000`. To use the Vite development server instead, run
@@ -104,7 +108,7 @@ python -m app.security 'a-long-unique-password'
 
 ## Railway deployment
 
-Create one Railway project with PostgreSQL and three services connected to the
+Create one Railway project with PostgreSQL and four services connected to the
 same GitHub repository. All services use the included `Dockerfile` and
 `railway.toml`; only `SERVICE_ROLE` differs:
 
@@ -113,8 +117,9 @@ same GitHub repository. All services use the included `Dockerfile` and
 | Web | `web` | 1 |
 | Trader | `trader-worker` | **exactly 1** |
 | Backtest | `backtest-worker` | 1 |
+| Claim | `claim-worker` | **exactly 1** |
 
-Share these variables with all three services:
+Share these variables with all four services:
 
 ```env
 APP_ENV=production
@@ -125,14 +130,58 @@ LIVE_TRADING_ENABLED=false
 TZ=Asia/Ho_Chi_Minh
 ```
 
-Add `POLY_*`, `BINANCE_BASE`, `CLOB_HOST`, and `GAMMA_HOST` to the trader
-service. Keep `LIVE_TRADING_ENABLED=false` through the first production
+Add trading `POLY_*`, `BINANCE_BASE`, `CLOB_HOST`, and `GAMMA_HOST` to the
+trader service. Put the signer, Deposit Wallet and either Builder or Relayer
+credentials only on `claim-worker`; CLOB credentials are optional there because
+the official SDK can derive them from the signer. Keep
+`AUTO_CLAIM_ENABLED=false` until one small resolved position has been tested.
+Keep `LIVE_TRADING_ENABLED=false` through the first production
 dry-run. Real runs require both that env switch and an in-dashboard password +
 `GIAO DICH THAT` confirmation.
 
 The web UI can change mode, run budget, minimum bet, one-shot, and max trades.
 It cannot change strategy weights or the T-40/T-10/T-5 timing profile. Every
 run stores the immutable guide ID `polymarket-btc-5m-v1`.
+
+The claim worker never opens a browser. It queries redeemable positions through
+the official `polymarket-client` SDK and submits a Deposit Wallet redemption to
+Polymarket's relayer. Claim failures are retried with backoff and never block the
+trader worker.
+
+For an existing Deposit Wallet account, create a Relayer API key under
+Polymarket `Settings > API Keys > Relayer API Keys`, then configure the claim
+process with:
+
+```env
+SERVICE_ROLE=claim-worker
+DATABASE_URL=postgresql://...same-database-as-web-and-trader...
+POLY_PRIVATE_KEY=...
+POLY_FUNDER_ADDRESS=...account-wallet-from-the-profile-menu...
+POLY_SIGNATURE_TYPE=3
+POLY_RELAYER_API_KEY=...
+POLY_RELAYER_ADDRESS=...signer-address-shown-with-the-key...
+AUTO_CLAIM_ENABLED=false
+```
+
+`POLY_API_KEY`, `POLY_API_SECRET`, and `POLY_API_PASSPHRASE` are optional for
+this process. When all three are omitted, the official SDK derives the CLOB
+credentials from the signer. Never provide only part of that three-variable
+set.
+
+In a hybrid deployment, Railway `web` and VPS `trader-worker`/`claim-worker`
+communicate only through the shared PostgreSQL `DATABASE_URL`; no direct worker
+URL is required. Run exactly one claim process:
+
+```bash
+docker compose up -d --build claim-worker
+docker compose logs -f claim-worker
+curl http://127.0.0.1:8000/health
+```
+
+Keep `AUTO_CLAIM_ENABLED=false` until the dashboard shows the claim worker
+heartbeat and the configured signer/wallet have been checked. Enable it first
+with one small resolved winning position; a relayer submit returns a
+`transactionID`, which the worker persists and polls across restarts.
 
 ## How it works
 
